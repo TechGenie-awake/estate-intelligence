@@ -21,6 +21,19 @@ import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
+# Agent + report pipeline (Milestone 2)
+try:
+    from agent.graph import advisory_graph
+    from report import AdvisoryReport, generate_pdf
+    _AGENT_AVAILABLE = True
+    _AGENT_IMPORT_ERROR = None
+except Exception as _e:
+    advisory_graph = None
+    AdvisoryReport = None
+    generate_pdf = None
+    _AGENT_AVAILABLE = False
+    _AGENT_IMPORT_ERROR = str(_e)
+
 st.set_page_config(
     page_title="Estate Intelligence",
     layout="wide",
@@ -262,6 +275,45 @@ st.markdown("""
         padding: 16px 0;
         border-top: 1px solid rgba(100,160,255,0.1);
     }
+
+    /* Agent trace timeline */
+    .trace-step {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+        background: rgba(34,197,94,0.06);
+        border-left: 3px solid #22c55e;
+        border-radius: 6px;
+        color: #cdd9e5;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 0.88rem;
+    }
+    .trace-step .tick {
+        color: #22c55e;
+        font-weight: 700;
+    }
+
+    /* Advisory section card */
+    .advisory-card {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(100,160,255,0.18);
+        border-radius: 12px;
+        padding: 18px 22px;
+        margin-bottom: 14px;
+    }
+    .advisory-card h4 {
+        color: #64a0ff !important;
+        margin: 0 0 10px 0;
+        font-size: 1.02rem;
+        font-weight: 700;
+    }
+    .advisory-card p, .advisory-card li {
+        color: #d5dee9 !important;
+        font-size: 0.94rem;
+        line-height: 1.6;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -296,8 +348,23 @@ with st.sidebar:
     1. **Predict** — Fill in property details in Tab 1 and click *Predict Price*.
     2. **Insights** — View feature importances and correlation heatmap in Tab 2.
     3. **Batch** — Upload a CSV in Tab 3 to predict multiple properties at once.
-    4. **Download** — Export batch results as CSV.
+    4. **AI Advisory** — Run the full LangGraph agent in Tab 4 for a grounded 6-section report with a PDF download.
     """)
+
+    st.markdown("---")
+    st.markdown("### Agent Status")
+    if _AGENT_AVAILABLE:
+        if os.environ.get("GROQ_API_KEY"):
+            st.markdown('<span class="status-badge status-ready">Advisory Ready</span>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="status-badge status-estimate">API Key Missing</span>',
+                        unsafe_allow_html=True)
+            st.caption("Set `GROQ_API_KEY` in `.env` to enable Tab 4.")
+    else:
+        st.markdown('<span class="status-badge status-estimate">Agent Unavailable</span>',
+                    unsafe_allow_html=True)
+        st.caption(f"Import error: {_AGENT_IMPORT_ERROR}")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -314,10 +381,11 @@ st.markdown("")
 # ──────────────────────────────────────────────────────────────
 # TABS
 # ──────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Predict Price",
     "Data Insights",
-    "Batch Prediction"
+    "Batch Prediction",
+    "AI Advisory",
 ])
 
 
@@ -554,6 +622,163 @@ with tab3:
                     mime="text/csv",
                     use_container_width=True,
                 )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 4 — AI ADVISORY (LangGraph agent + RAG + PDF export)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab4:
+    st.markdown("### AI-Powered Property Advisory")
+    st.caption(
+        "Runs a LangGraph agent: validate → predict → retrieve (FAISS RAG) → "
+        "generate (Groq LLM). Produces a 6-section advisory report with a PDF download."
+    )
+
+    if not _AGENT_AVAILABLE:
+        st.error(f"Agent modules failed to import: `{_AGENT_IMPORT_ERROR}`. "
+                 "Run `pip install -r requirements.txt` and restart.")
+        st.stop()
+
+    if not os.environ.get("GROQ_API_KEY"):
+        st.warning(
+            "`GROQ_API_KEY` is not set. Get a free key at "
+            "[console.groq.com](https://console.groq.com) and add it to your `.env` file."
+        )
+
+    # ── Inputs ──
+    ac1, ac2 = st.columns(2)
+    with ac1:
+        adv_area            = st.number_input("Area (sq ft)", min_value=500,
+                                              max_value=20000, value=1800, step=50,
+                                              key="adv_area")
+        adv_bedrooms        = st.selectbox("Bedrooms", [1, 2, 3, 4, 5, 6],
+                                           index=2, key="adv_bedrooms")
+        adv_bathrooms       = st.selectbox("Bathrooms", [1, 2, 3, 4],
+                                           index=1, key="adv_bathrooms")
+        adv_stories         = st.selectbox("Stories", [1, 2, 3, 4],
+                                           index=1, key="adv_stories")
+        adv_parking         = st.selectbox("Parking Spots", [0, 1, 2, 3],
+                                           index=2, key="adv_parking")
+        adv_furnishing      = st.selectbox(
+            "Furnishing", ["Unfurnished", "Semi-Furnished", "Furnished"],
+            index=1, key="adv_furnishing",
+        )
+    with ac2:
+        adv_mainroad        = st.radio("Main Road Access", ["Yes", "No"],
+                                       index=0, horizontal=True, key="adv_mainroad")
+        adv_guestroom       = st.radio("Guest Room", ["Yes", "No"],
+                                       index=1, horizontal=True, key="adv_guestroom")
+        adv_basement        = st.radio("Basement", ["Yes", "No"],
+                                       index=1, horizontal=True, key="adv_basement")
+        adv_hotwater        = st.radio("Hot Water Heating", ["Yes", "No"],
+                                       index=1, horizontal=True, key="adv_hotwater")
+        adv_ac              = st.radio("Air Conditioning", ["Yes", "No"],
+                                       index=0, horizontal=True, key="adv_ac")
+        adv_prefarea        = st.radio("Preferred Area", ["Yes", "No"],
+                                       index=0, horizontal=True, key="adv_prefarea")
+
+    st.markdown("")
+
+    if st.button("Generate Advisory Report", use_container_width=True, key="run_agent"):
+        yn = lambda v: 1 if v == "Yes" else 0
+        fmap = {"Unfurnished": 0, "Semi-Furnished": 1, "Furnished": 2}
+        property_input = {
+            "area":             adv_area,
+            "bedrooms":         adv_bedrooms,
+            "bathrooms":        adv_bathrooms,
+            "stories":          adv_stories,
+            "mainroad":         yn(adv_mainroad),
+            "guestroom":        yn(adv_guestroom),
+            "basement":         yn(adv_basement),
+            "hotwaterheating":  yn(adv_hotwater),
+            "airconditioning":  yn(adv_ac),
+            "parking":          adv_parking,
+            "prefarea":         yn(adv_prefarea),
+            "furnishingstatus": fmap[adv_furnishing],
+        }
+
+        initial_state = {
+            "property_input":     property_input,
+            "validated_input":    None,
+            "validation_errors":  [],
+            "predicted_price":    None,
+            "market_trends":      None,
+            "report":             None,
+            "report_structured":  None,
+            "agent_steps":        [],
+        }
+
+        with st.spinner("Running agent pipeline — validating, predicting, retrieving, generating…"):
+            try:
+                st.session_state["advisory_state"] = advisory_graph.invoke(initial_state)
+                st.session_state["advisory_error"] = None
+            except Exception as e:
+                st.session_state["advisory_state"] = None
+                st.session_state["advisory_error"] = f"{type(e).__name__}: {e}"
+
+    # ── Render result ──
+    if st.session_state.get("advisory_error"):
+        st.error(f"Agent run failed: {st.session_state['advisory_error']}")
+
+    adv_state = st.session_state.get("advisory_state")
+    if adv_state:
+        # Agent trace
+        st.markdown("#### Agent Trace")
+        st.caption("Each LangGraph node logs its step here — full pipeline transparency.")
+        for step in adv_state.get("agent_steps") or []:
+            st.markdown(
+                f'<div class="trace-step"><span class="tick">✓</span><span>{step}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+        # Validation warnings
+        val_errors = adv_state.get("validation_errors") or []
+        if val_errors:
+            with st.expander(f"Data Quality Notes ({len(val_errors)})", expanded=False):
+                for err in val_errors:
+                    st.markdown(f"- {err}")
+
+        # Predicted price
+        price = adv_state.get("predicted_price")
+        if price is not None:
+            st.markdown(
+                f"""
+                <div class="price-box">
+                    <div class="label">ML-Predicted Price</div>
+                    <div class="price">{format_inr(price)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # 6-section advisory
+        structured = adv_state.get("report_structured")
+        if structured:
+            report_model = AdvisoryReport(**structured)
+            st.markdown("#### Advisory Report")
+            for title, body in report_model.sections():
+                with st.expander(title, expanded=True):
+                    st.markdown(body or "_No content generated for this section._")
+
+            # PDF download
+            try:
+                pdf_bytes = generate_pdf(
+                    report_model,
+                    predicted_price=price or 0,
+                    property_input=adv_state.get("validated_input") or {},
+                )
+                st.download_button(
+                    label="Download Report as PDF",
+                    data=pdf_bytes,
+                    file_name="estate_intelligence_advisory.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"PDF generation failed: {type(e).__name__}: {e}")
+        elif adv_state.get("report"):
+            st.markdown("#### Advisory Report (raw)")
+            st.markdown(adv_state["report"])
 
 
 # ──────────────────────────────────────────────────────────────
