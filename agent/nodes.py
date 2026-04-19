@@ -126,22 +126,64 @@ def predict_price_node(state: AgentState) -> AgentState:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Retrieve market trends (stub — Person 2 replaces with RAG)
+# NODE 3 — Retrieve market trends via FAISS RAG over the knowledge base
 # ═════════════════════════════════════════════════════════════════════════════
+_FALLBACK_TRENDS = (
+    "Indian real estate market (2024-25): Tier-1 cities report 8–12% YoY price appreciation. "
+    "RBI repo rate held at 6.5%, keeping home loan rates between 8.5–9.5%. "
+    "Government PMAY scheme supports affordable housing (under ₹45L). "
+    "Properties with metro/highway connectivity command a 15–20% premium. "
+    "Air-conditioned and furnished properties in preferred localities see faster transactions."
+)
+
+
+def _build_retrieval_query(inp: dict, price: float | None) -> str:
+    """
+    Craft a retrieval query from the validated property features so the FAISS
+    search surfaces the most relevant market/regulatory chunks.
+    """
+    furnish_map = {0: "unfurnished", 1: "semi-furnished", 2: "furnished"}
+    parts = [
+        f"{inp.get('bedrooms', '?')} BHK {inp.get('area', '?')} sq ft residential property",
+        furnish_map.get(inp.get("furnishingstatus"), ""),
+    ]
+    if inp.get("airconditioning"):
+        parts.append("with air conditioning")
+    if inp.get("prefarea"):
+        parts.append("in preferred area")
+    if inp.get("parking"):
+        parts.append(f"{inp['parking']} parking")
+    if price is not None:
+        if price < 45_00_000:
+            parts.append("affordable housing PMAY subsidy")
+        elif price > 1_00_00_000:
+            parts.append("premium market gated community")
+    parts.append("market trend price per sq ft home loan RBI regulation")
+    return " ".join(p for p in parts if p)
+
+
 def retrieve_trends_node(state: AgentState) -> AgentState:
     """
-    Placeholder until Person 2 wires in the FAISS/RAG retrieval.
-    Returns a static market summary so the rest of the pipeline works end-to-end.
+    Queries the FAISS index built from rag/knowledge_base/ and returns a
+    grounded market/regulatory context. On any failure, falls back to a
+    static summary so the pipeline never hard-fails — the data-quality
+    note will surface the degradation.
     """
-    trends = (
-        "Indian real estate market (2024-25): Tier-1 cities report 8–12% YoY price appreciation. "
-        "RBI repo rate held at 6.5%, keeping home loan rates between 8.5–9.5%. "
-        "Government PMAY scheme supports affordable housing (under ₹45L). "
-        "Properties with metro/highway connectivity command a 15–20% premium. "
-        "Air-conditioned and furnished properties in preferred localities see faster transactions. "
-        "Demand for 3BHK units strongest in urban markets; 2BHK dominant in tier-2 cities."
-    )
-    return {**state, "market_trends": trends}
+    inp = state.get("validated_input") or {}
+    price = state.get("predicted_price")
+    errors = list(state.get("validation_errors") or [])
+
+    query = _build_retrieval_query(inp, price)
+
+    try:
+        from rag.retriever import retrieve, format_context
+        results = retrieve(query, k=4)
+        trends = format_context(results) or _FALLBACK_TRENDS
+    except Exception as e:
+        errors.append(f"RAG retrieval unavailable ({type(e).__name__}) — using fallback market context")
+        trends = _FALLBACK_TRENDS
+
+    return {**state, "market_trends": trends, "validation_errors": errors}
 
 
 # ═════════════════════════════════════════════════════════════════════════════

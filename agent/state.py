@@ -6,5 +6,5 @@ class AgentState(TypedDict):
     validated_input: Optional[dict]   # cleaned input with defaults filled in
     validation_errors: List[str]      # list of warnings about missing or invalid fields
     predicted_price: Optional[float]  # output from the ML model (₹)
-    market_trends: Optional[str]      # retrieved context (filled by Person 2's RAG node)
+    market_trends: Optional[str]      # retrieved RAG context
     report: Optional[str]             # final structured advisory report from LLM

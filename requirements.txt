@@ -8,7 +8,9 @@ joblib
 altair<5.0.0
 python-dotenv
 
-# Milestone 2 — Agent
 langgraph
 langchain-groq
 langchain-core
+
+sentence-transformers
+faiss-cpu
