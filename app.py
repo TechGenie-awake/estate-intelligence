@@ -177,6 +177,14 @@ st.markdown("""
 
     .stApp { background: var(--canvas); }
 
+    /* Hide Streamlit default chrome (top header bar, main menu, footer) */
+    header[data-testid="stHeader"] { display: none !important; }
+    #MainMenu { visibility: hidden !important; }
+    footer { visibility: hidden !important; }
+    div[data-testid="stToolbar"] { display: none !important; }
+    div[data-testid="stDecoration"] { display: none !important; }
+    div[data-testid="stStatusWidget"] { display: none !important; }
+
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
